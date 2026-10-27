@@ -9,11 +9,16 @@ from pydantic import BaseModel
 
 
 class BenchmarkTask(BaseModel):
+    """What the agents may see: the instruction and the input workbook only.
+
+    Reference answers are deliberately absent. The evaluator looks them up
+    separately with find_answer_path().
+    """
+
     task_id: str
     variant: int
     instruction: str
     input_path: Path
-    answer_path: Path | None = None
 
 
 def load_metadata(root: str | Path) -> list[dict[str, Any]]:
@@ -84,15 +89,11 @@ def find_task_instruction(
     return str(instruction)
 
 
-def load_task(
-    root: str | Path,
+def _find_input_workbook(
+    root: Path,
     task_id: str,
-    variant: int = 1,
-) -> BenchmarkTask:
-
-    root = Path(root)
-
-    instruction = find_task_instruction(root, task_id)
+    variant: int,
+) -> Path:
 
     filename = f"{variant}_{task_id}_input.xlsx"
 
@@ -106,18 +107,40 @@ def load_task(
             f"found {len(candidates)}"
         )
 
-    input_path = candidates[0]
+    return candidates[0]
+
+
+def load_task(
+    root: str | Path,
+    task_id: str | int,
+    variant: int = 1,
+) -> BenchmarkTask:
+
+    root = Path(root)
+    task_id = str(task_id)
+
+    return BenchmarkTask(
+        task_id=task_id,
+        variant=variant,
+        instruction=find_task_instruction(root, task_id),
+        input_path=_find_input_workbook(root, task_id, variant),
+    )
+
+
+def find_answer_path(
+    root: str | Path,
+    task_id: str,
+    variant: int = 1,
+) -> Path | None:
+    """Locate the reference answer for the external evaluator.
+
+    Never call this from agent code or put its result in agent state.
+    """
+
+    input_path = _find_input_workbook(Path(root), task_id, variant)
 
     answer_path = input_path.with_name(
         f"{variant}_{task_id}_answer.xlsx"
     )
 
-    return BenchmarkTask(
-        task_id=task_id,
-        variant=variant,
-        instruction=instruction,
-        input_path=input_path,
-        answer_path=(
-            answer_path if answer_path.exists() else None
-        ),
-    )
+    return answer_path if answer_path.exists() else None
