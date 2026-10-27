@@ -4,8 +4,10 @@
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.formula.translate import Translator
 from openpyxl.utils.cell import (
     coordinate_from_string,
+    get_column_letter,
     range_boundaries,
 )
 
@@ -16,6 +18,36 @@ from spreadsheet_agents.schemas.task import (
 
 def _validate_cell(cell: str) -> None:
     coordinate_from_string(cell)
+
+
+def translate_copied_value(value, source_cell: str, destination_cell: str):
+    """Return what Excel would paste: formulas have relative references shifted."""
+
+    if isinstance(value, str) and value.startswith("="):
+        return Translator(value, origin=source_cell).translate_formula(
+            destination_cell
+        )
+
+    return value
+
+
+def copy_cell_pairs(
+    source_range: str,
+    destination_cell: str,
+) -> list[tuple[str, str]]:
+    """Pair every source coordinate with the coordinate it is copied to."""
+
+    min_col, min_row, max_col, max_row = range_boundaries(source_range)
+    dst_col, dst_row, _, _ = range_boundaries(destination_cell)
+
+    return [
+        (
+            f"{get_column_letter(min_col + col_offset)}{min_row + row_offset}",
+            f"{get_column_letter(dst_col + col_offset)}{dst_row + row_offset}",
+        )
+        for row_offset in range(max_row - min_row + 1)
+        for col_offset in range(max_col - min_col + 1)
+    ]
 
 
 def _apply_operation(wb, operation: SpreadsheetOperation):
@@ -88,30 +120,21 @@ def _apply_operation(wb, operation: SpreadsheetOperation):
         src = wb[op.source_sheet]
         dst = wb[op.destination_sheet]
 
-        min_col, min_row, max_col, max_row = (
-            range_boundaries(op.source_range)
-        )
-
-        dst_col, dst_row, _, _ = range_boundaries(
-            op.destination_cell
-        )
-
         # Snapshot first to support overlapping ranges.
-        values = [
-            [
-                src.cell(row=r, column=c).value
-                for c in range(min_col, max_col + 1)
-            ]
-            for r in range(min_row, max_row + 1)
+        copies = [
+            (
+                destination,
+                translate_copied_value(
+                    src[source].value, source, destination
+                ),
+            )
+            for source, destination in copy_cell_pairs(
+                op.source_range, op.destination_cell
+            )
         ]
 
-        for row_offset, row_values in enumerate(values):
-            for col_offset, value in enumerate(row_values):
-                dst.cell(
-                    row=dst_row + row_offset,
-                    column=dst_col + col_offset,
-                    value=value,
-                )
+        for destination, value in copies:
+            dst[destination] = value
 
         return
 

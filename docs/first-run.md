@@ -34,9 +34,37 @@ fill-down does. Any task that fills a formula down a column will produce wrong r
 `copy_range`. The runtime Validator caught it, but only because its LLM pass inspected the output;
 the deterministic pass reports `copy_range` as unverified (a warning), as designed.
 
-Not fixed in this milestone on purpose: changing the tool or prompts to pass a single task would
-bias the baseline. Follow-up: make `copy_range` translate relative references (for example with
-`openpyxl.formula.translate.Translator`) and verify copies deterministically.
+This was a tool bug, not a prompt problem, so it was fixed afterwards (issue #22): `copy_range` now
+shifts relative references like Excel's fill-down, and the Validator checks copies against the
+output. Prompts were not changed to make this task pass, to keep the baseline unbiased.
+
+## After the `copy_range` fix: six tasks
+
+Run on code version `fc427be` (`copy_range` fix plus the array-formula fix), `gpt-4.1-mini`, one run
+each. "Our verdict" is the runtime Validator; "Checked by hand" compares the output with the input
+workbook. Neither is a benchmark score.
+
+| Task | Our verdict | Checked by hand |
+|---|---|---|
+| `59196` | success | Per-row formulas in `H4:H5`, `H3` untouched. Looks correct |
+| `15027` | success | **Wrong.** `B6` gives 1008.33 where the original gives 1000, `C6` gives 1019.4 where it gave 1008.33. The numerator uses the same column's row 7 instead of the previous column's, and the divisor is one too low. `H6` would divide by zero if `H5` were non-zero. A false success |
+| `493-18` | failed | Correctly failed. The Editor cleared rows 2-5 (Ford, VW, Audi, Ferrari); the rule (name not in column F) says rows 2, 3 and 7 (Ford, VW, Fiat). Audi and Ferrari were erased wrongly. The Validator's stated reason was inaccurate |
+| `55860` | error | The Editor declined ("ambiguous"). The sheet has 43 rows; the model saw 5 |
+| `61-1` | error | The Editor declined (instruction says VBA macro). The sheet has 9 rows; the model saw 5 |
+| `275-49` | error | The Editor declined (ambiguous). The sheet has 11 rows; the model saw 5 |
+
+Of six tasks, one output looks correct. Findings:
+
+1. **The model sees only 5 rows per sheet** (`max_preview_rows`). Three of the refusals involve
+   sheets larger than that. Not yet shown to be the cause.
+2. **A refusal is recorded as `status: error`**, indistinguishable from a crash. It needs its own
+   status (for example `declined`) so metrics can separate model refusals from code failures.
+3. **"Success" means the plan was applied, not that it is right.** Nothing evaluates formulas, so
+   a wrong formula passes (`15027`). The official evaluation against the reference answers
+   (Milestone 3) is needed to know true accuracy.
+4. **The Validator's explanations are unreliable.** It filed a passing observation under errors
+   (`15027`, earlier run) and gave the wrong reason for `493-18`.
+5. The Editor adds changes nobody asked for (`493-18` wrote Keep/Remove formulas into column G).
 
 ## Problems the real run exposed (already fixed)
 
