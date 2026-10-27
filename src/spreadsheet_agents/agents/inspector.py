@@ -2,12 +2,12 @@
 
 """
 from pathlib import Path
+
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel, Field
 
 from spreadsheet_agents.schemas.workbook import WorkbookInfo
 from spreadsheet_agents.tools.workbook_reader import inspect_workbook
-
 
 PROMPT_PATH = (
     Path(__file__).resolve().parents[1]

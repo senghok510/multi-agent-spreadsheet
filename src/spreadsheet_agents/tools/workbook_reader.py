@@ -2,7 +2,9 @@
 
 """
 from pathlib import Path
+
 from openpyxl import load_workbook
+
 from spreadsheet_agents.schemas.workbook import (
     SheetInfo,
     WorkbookInfo,
