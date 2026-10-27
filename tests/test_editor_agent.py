@@ -30,8 +30,9 @@ class FakeLLM:
         self.messages = None
         FakeLLM.instances.append(self)
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
         self.schema = schema
+        self.kwargs = kwargs
         return self
 
     def invoke(self, messages):
@@ -92,6 +93,7 @@ def test_generate_returns_structured_plan(fake_llm, context, monkeypatch):
     assert result == plan
     llm = fake_llm.instances[0]
     assert llm.schema is EditPlan
+    assert llm.kwargs == {"method": "function_calling"}
     assert llm.model == "test-model"
     assert llm.temperature == 0
 

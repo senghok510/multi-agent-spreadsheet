@@ -47,8 +47,9 @@ class FakeLLM:
         self.schema = None
         FakeLLM.instances.append(self)
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
         self.schema = schema
+        self.kwargs = kwargs
         return self
 
     def invoke(self, messages):
@@ -213,6 +214,7 @@ def test_llm_sees_request_plan_and_output_preview(fake_llm, output, monkeypatch)
     llm = fake_llm.instances[0]
     text = "\n".join(content for _, content in llm.messages)
     assert llm.schema is ValidationReport
+    assert llm.kwargs == {"method": "function_calling"}
     assert "add total" in text
     assert "multiply columns" in text
     assert "Region" in text  # preview of the real output workbook

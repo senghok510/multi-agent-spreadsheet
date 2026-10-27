@@ -26,7 +26,10 @@ def generate_edit_plan(
     llm = ChatOpenAI(
         model=model,
         temperature=0,
-    ).with_structured_output(EditPlan)
+    ).with_structured_output(
+        EditPlan,
+        method="function_calling",
+    )
 
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
 
