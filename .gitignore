@@ -1,0 +1,27 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+
+# Local secrets and OS files
+.env
+.env.*
+!.env.example
+.DS_Store
+
+# Test and analysis caches
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Benchmark data and generated artifacts
+data/raw/
+outputs/*/*
+!outputs/*/.gitkeep

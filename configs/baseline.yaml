@@ -1,0 +1,23 @@
+experiment:
+  name: milestone1_baseline
+  seed: 42
+
+llm:
+  model: gpt-4.1-mini
+  temperature: 0
+
+agents:
+  max_retries: 1
+
+execution:
+  max_operations: 1000
+  max_rows: 100000
+  max_columns: 500
+  timeout_seconds: 60
+
+benchmark:
+  root: data/raw/spreadsheetbench_v1/sample_data_200
+  variant: 1
+
+output:
+  directory: outputs
