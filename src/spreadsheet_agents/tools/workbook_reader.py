@@ -4,11 +4,24 @@
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.worksheet.formula import ArrayFormula, DataTableFormula
 
 from spreadsheet_agents.schemas.workbook import (
     SheetInfo,
     WorkbookInfo,
 )
+
+
+def _plain(value):
+    """Turn openpyxl's special formula objects into JSON-friendly values."""
+
+    if isinstance(value, ArrayFormula):
+        return value.text
+
+    if isinstance(value, DataTableFormula):
+        return f"{{data table: {value.ref}}}"
+
+    return value
 
 
 def inspect_workbook(
@@ -36,7 +49,7 @@ def inspect_workbook(
                 max_col=min(ws.max_column, max_preview_columns),
                 values_only=True,
             ):
-                preview.append(list(row))
+                preview.append([_plain(value) for value in row])
 
             headers = (
                 [
@@ -58,7 +71,7 @@ def inspect_workbook(
                     if cell.data_type == "f":
                         formulas.append({
                             "cell": cell.coordinate,
-                            "formula": str(cell.value),
+                            "formula": str(_plain(cell.value)),
                         })
 
                         if len(formulas) >= max_formulas:
