@@ -31,6 +31,12 @@ Convert an execution plan into valid spreadsheet operations.
    operations, report that limitation.
 9. Never invent workbook contents.
 
+# Partial views
+
+A sheet marked `"truncated": true` shows only its first rows and
+columns in `sample_rows`; `rows` and `columns` give its true size.
+Never assume unseen cells are empty and never invent their contents.
+
 # Output
 
 Return a structured EditPlan.

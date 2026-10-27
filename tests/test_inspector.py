@@ -101,3 +101,60 @@ def test_array_formula_in_sample_rows_is_plain_text(array_formula_path):
 def test_workbook_info_with_array_formula_serializes_to_json(array_formula_path):
     info = inspect_workbook(array_formula_path)
     assert "MAX(IF(" in info.model_dump_json()
+
+
+def make_sheet(path: Path, rows: int, columns: int) -> Path:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Data"
+    for r in range(1, rows + 1):
+        ws.append([f"r{r}c{c}" for c in range(1, columns + 1)])
+    wb.save(path)
+    return path
+
+
+def test_default_view_shows_a_whole_small_sheet(tmp_path):
+    # The first real runs saw only 5 rows; guard against going back to that.
+    sheet = inspect_workbook(make_sheet(tmp_path / "a.xlsx", rows=40, columns=8)).sheets[0]
+    assert len(sheet.sample_rows) == 40
+    assert sheet.sample_rows[-1][0] == "r40c1"
+    assert sheet.truncated is False
+
+
+def test_sheet_exactly_at_the_cap_is_not_truncated(tmp_path):
+    sheet = inspect_workbook(make_sheet(tmp_path / "a.xlsx", rows=50, columns=30)).sheets[0]
+    assert len(sheet.sample_rows) == 50
+    assert len(sheet.sample_rows[0]) == 30
+    assert sheet.truncated is False
+
+
+def test_extra_rows_are_cut_and_flagged_with_the_true_size(tmp_path):
+    sheet = inspect_workbook(make_sheet(tmp_path / "a.xlsx", rows=51, columns=4)).sheets[0]
+    assert len(sheet.sample_rows) == 50
+    assert sheet.rows == 51
+    assert sheet.truncated is True
+
+
+def test_extra_columns_are_cut_and_flagged(tmp_path):
+    sheet = inspect_workbook(make_sheet(tmp_path / "a.xlsx", rows=3, columns=31)).sheets[0]
+    assert len(sheet.sample_rows[0]) == 30
+    assert sheet.columns == 31
+    assert sheet.truncated is True
+
+
+def test_custom_limits_still_control_truncation(tmp_path):
+    path = make_sheet(tmp_path / "a.xlsx", rows=10, columns=3)
+    assert inspect_workbook(path, max_preview_rows=10).sheets[0].truncated is False
+    assert inspect_workbook(path, max_preview_rows=9).sheets[0].truncated is True
+
+
+def test_truncated_flag_reaches_the_model_input(tmp_path):
+    info = inspect_workbook(make_sheet(tmp_path / "a.xlsx", rows=60, columns=2))
+    assert '"truncated": true' in info.model_dump_json(indent=2)
+
+
+@pytest.mark.parametrize("agent", ["inspector", "orchestrator", "editor"])
+def test_prompts_explain_truncated_sheets(agent):
+    prompt = Path(f"src/spreadsheet_agents/prompts/baseline/{agent}.md").read_text()
+    assert '"truncated": true' in prompt
+    assert "never invent" in prompt.lower()

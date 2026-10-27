@@ -17,6 +17,12 @@ needed to complete the user request.
 5. Never modify the workbook.
 6. Never invent columns or worksheet names.
 
+# Partial views
+
+A sheet marked `"truncated": true` shows only its first rows and
+columns in `sample_rows`; `rows` and `columns` give its true size.
+Never assume unseen cells are empty and never invent their contents.
+
 # Output
 
 Provide a concise structured inspection report.

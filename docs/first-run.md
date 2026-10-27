@@ -66,6 +66,29 @@ Of six tasks, one output looks correct. Findings:
    (`15027`, earlier run) and gave the wrong reason for `493-18`.
 5. The Editor adds changes nobody asked for (`493-18` wrote Keep/Remove formulas into column G).
 
+## After showing the model whole sheets (50 rows x 30 columns)
+
+Finding 1 above suspected the 5-row preview. The default view is now 50 rows by 30 columns
+(79% of the dataset's sheets in full; sheets that do not fit are flagged `truncated`). The three
+declined tasks were rerun, one run each, `gpt-4.1-mini`:
+
+| Task | Before | Now | Checked by hand |
+|---|---|---|---|
+| `55860` | declined | **declined** | All 43 rows were visible and the Editor still called the request ambiguous, so the preview was not the cause here |
+| `61-1` | declined | success | **False success.** Column D is unchanged; the Editor wrote `=D2 & "-001"` into a new column G. The task changes D in place. (The reference answer shows `-001` appended three times, so a single append would not match it either.) The Validator noted the workaround and still passed it |
+| `275-49` | declined | failed | Correct verdict, wrong reason. The Validator complained that no macro exists; it missed that the Editor wrote `=B2` into `B2` and `=C2` into `C2` (circular references that destroy the original data). Column A, an ID, was overwritten with a merged string |
+
+Conclusion: seeing the whole sheet is the right input, but it did not make results more correct.
+Two refusals became wrong attempts, one of which passed our checks. Of nine task runs so far,
+one output looks correct (`59196`).
+
+New findings:
+
+6. **Self-referencing formulas are not rejected.** `set_formula` accepted `=B2` in cell `B2`. This is
+   objectively wrong and cheap to check deterministically.
+7. **The Editor tends to add helper columns instead of editing in place**, and the Validator accepts
+   the workaround even when it notes it.
+
 ## Problems the real run exposed (already fixed)
 
 Mocked tests cannot find these; only calling the real API can.
