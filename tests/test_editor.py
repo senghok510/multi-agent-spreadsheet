@@ -123,6 +123,68 @@ def test_copy_range_handles_overlap(source, out):
     ]
 
 
+def _copy(source_range, destination_cell, sheet="Sales"):
+    return op(
+        "copy_range",
+        source_sheet=sheet,
+        source_range=source_range,
+        destination_sheet=sheet,
+        destination_cell=destination_cell,
+    )
+
+
+def test_copy_range_shifts_relative_references_like_fill_down(source, out):
+    apply_operations(
+        source,
+        out,
+        [
+            op("set_formula", sheet="Sales", cell="D2", value="=B2*C2"),
+            _copy("D2", "D3"),
+            _copy("D2", "D4"),
+        ],
+    )
+    sales = read(out)["Sales"]
+    assert sales["D3"].value == "=B3*C3"
+    assert sales["D4"].value == "=B4*C4"
+
+
+def test_copy_range_keeps_absolute_references_fixed(source, out):
+    apply_operations(
+        source,
+        out,
+        [op("set_formula", sheet="Sales", cell="D2", value="=B2*$C$2"), _copy("D2", "D3")],
+    )
+    assert read(out)["Sales"]["D3"].value == "=B3*$C$2"
+
+
+def test_copy_range_shifts_references_across_columns_too(source, out):
+    apply_operations(
+        source,
+        out,
+        [op("set_formula", sheet="Sales", cell="D2", value="=B2+C2"), _copy("D2", "E2")],
+    )
+    assert read(out)["Sales"]["E2"].value == "=C2+D2"
+
+
+def test_copy_range_translates_every_formula_in_a_block(source, out):
+    apply_operations(
+        source,
+        out,
+        [
+            op("set_formula", sheet="Sales", cell="D2", value="=B2"),
+            op("set_formula", sheet="Sales", cell="E2", value="=C2"),
+            _copy("D2:E2", "D5"),
+        ],
+    )
+    sales = read(out)["Sales"]
+    assert (sales["D5"].value, sales["E5"].value) == ("=B5", "=C5")
+
+
+def test_copy_range_does_not_touch_plain_text_that_looks_like_a_formula(source, out):
+    apply_operations(source, out, [_copy("A2", "A5")])  # "North": ordinary value
+    assert read(out)["Sales"]["A5"].value == "North"
+
+
 def test_copy_range_requires_all_fields(source, out):
     with pytest.raises(RuntimeError, match="requires source and destination"):
         apply_operations(source, out, [op("copy_range", source_sheet="Sales")])

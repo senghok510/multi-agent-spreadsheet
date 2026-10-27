@@ -11,12 +11,85 @@ from spreadsheet_agents.schemas.task import (
     TaskPlan,
     ValidationReport,
 )
+from spreadsheet_agents.tools.workbook_editor import (
+    copy_cell_pairs,
+    translate_copied_value,
+)
 from spreadsheet_agents.tools.workbook_reader import inspect_workbook
 
 PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "prompts/baseline/validator.md"
 )
+
+
+def _written_cells(op) -> set[tuple[str, str]]:
+    """Cells an operation writes (sheet, coordinate)."""
+
+    if op.type in {"set_cell", "set_formula", "clear_cell"}:
+        return {(op.sheet, op.cell)}
+
+    if op.type == "copy_range":
+        return {
+            (op.destination_sheet, destination)
+            for _, destination in copy_cell_pairs(
+                op.source_range, op.destination_cell
+            )
+        }
+
+    return set()
+
+
+def _verify_copy(wb, operations, index) -> tuple[list[str], str | None]:
+    """Check a copy_range against the output workbook.
+
+    Returns (errors, reason_unverified). The check reads the source from
+    the output, so it is only sound when nothing writes to the source or
+    destination cells after the copy.
+    """
+
+    op = operations[index]
+
+    try:
+        pairs = copy_cell_pairs(op.source_range, op.destination_cell)
+        later_writes = set().union(
+            *(_written_cells(later) for later in operations[index + 1:])
+        )
+    except Exception as exc:
+        return [], f"invalid range ({exc})"
+
+    for sheet in (op.source_sheet, op.destination_sheet):
+        if sheet not in wb.sheetnames:
+            return [f"Missing sheet: {sheet}"], None
+
+    touched = {(op.source_sheet, s) for s, _ in pairs} | {
+        (op.destination_sheet, d) for _, d in pairs
+    }
+
+    if {(op.source_sheet, s) for s, _ in pairs} & {
+        (op.destination_sheet, d) for _, d in pairs
+    }:
+        return [], "source and destination overlap"
+
+    if touched & later_writes:
+        return [], "a later operation changes the copied cells"
+
+    errors = []
+
+    for source, destination in pairs:
+        expected = translate_copied_value(
+            wb[op.source_sheet][source].value, source, destination
+        )
+        actual = wb[op.destination_sheet][destination].value
+
+        if actual != expected:
+            errors.append(
+                f"{op.destination_sheet}!{destination}: expected "
+                f"{expected!r} (copy of {op.source_sheet}!{source}), "
+                f"got {actual!r}"
+            )
+
+    return errors, None
 
 
 def deterministic_validate(
@@ -41,7 +114,7 @@ def deterministic_validate(
     last_cell_op = {}
 
     try:
-        for op in edit_plan.operations:
+        for index, op in enumerate(edit_plan.operations):
 
             if op.type == "create_sheet":
                 checked += 1
@@ -59,15 +132,20 @@ def deterministic_validate(
                 last_cell_op[(op.sheet, op.cell)] = op
 
             elif op.type == "copy_range":
-                # Copy verification requires comparing the
-                # source and destination ranges.
-                # Not implemented in this first validator, so
-                # say so instead of silently reporting success.
-                warnings.append(
-                    "copy_range was not verified: "
-                    f"{op.source_sheet}!{op.source_range} -> "
-                    f"{op.destination_sheet}!{op.destination_cell}"
+                copy_errors, unverified = _verify_copy(
+                    wb, edit_plan.operations, index
                 )
+
+                if unverified:
+                    warnings.append(
+                        "copy_range was not verified "
+                        f"({unverified}): "
+                        f"{op.source_sheet}!{op.source_range} -> "
+                        f"{op.destination_sheet}!{op.destination_cell}"
+                    )
+                else:
+                    checked += 1
+                    errors.extend(copy_errors)
 
         for op in last_cell_op.values():
             checked += 1

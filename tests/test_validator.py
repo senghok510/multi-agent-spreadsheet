@@ -123,22 +123,106 @@ def test_overwritten_cell_is_judged_by_its_final_value(output):
     assert report.passed
 
 
-def test_copy_range_is_reported_as_unverified(output):
+def copy_op(source_range, destination_cell, source_sheet="Sales", destination_sheet="Sales"):
+    return op(
+        "copy_range",
+        source_sheet=source_sheet,
+        source_range=source_range,
+        destination_sheet=destination_sheet,
+        destination_cell=destination_cell,
+    )
+
+
+@pytest.fixture
+def fill_down(tmp_path: Path) -> Workbook:
+    """Output of: set_formula D2, copy D2 -> D3 (done correctly by the editor)."""
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales"
+    ws["D2"] = "=B2*C2"
+    ws["D3"] = "=B3*C3"
+    return wb
+
+
+def save(wb: Workbook, tmp_path: Path) -> str:
+    path = tmp_path / "copy.xlsx"
+    wb.save(path)
+    return str(path)
+
+
+def test_copy_range_with_adjusted_formula_passes(fill_down, tmp_path):
     report = deterministic_validate(
-        str(output),
-        plan(
-            op(
-                "copy_range",
-                source_sheet="Sales",
-                source_range="A1:A2",
-                destination_sheet="Summary",
-                destination_cell="A1",
-            )
-        ),
+        save(fill_down, tmp_path),
+        plan(op("set_formula", sheet="Sales", cell="D2", value="=B2*C2"), copy_op("D2", "D3")),
+    )
+    assert report.passed, report.errors
+    assert report.checked_operations == 2
+    assert report.warnings == []
+
+
+def test_copy_range_detects_formula_that_was_not_adjusted(fill_down, tmp_path):
+    fill_down["Sales"]["D3"] = "=B2*C2"  # the verbatim-copy bug from the first real run
+    report = deterministic_validate(save(fill_down, tmp_path), plan(copy_op("D2", "D3")))
+    assert not report.passed
+    assert "Sales!D3" in report.errors[0]
+    assert "=B3*C3" in report.errors[0]
+
+
+def test_copy_range_detects_missing_destination_value(fill_down, tmp_path):
+    fill_down["Sales"]["D3"] = None
+    report = deterministic_validate(save(fill_down, tmp_path), plan(copy_op("D2", "D3")))
+    assert not report.passed
+
+
+def test_copy_range_checks_every_cell_of_a_block(tmp_path):
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sales"
+    ws["A1"], ws["B1"], ws["A2"], ws["B2"] = 1, 2, 3, 4
+    ws["D1"], ws["E1"], ws["D2"], ws["E2"] = 1, 2, 3, 99  # last cell is wrong
+    report = deterministic_validate(save(wb, tmp_path), plan(copy_op("A1:B2", "D1")))
+    assert not report.passed
+    assert len(report.errors) == 1
+    assert "Sales!E2" in report.errors[0]
+
+
+def test_copy_range_to_another_sheet(tmp_path):
+    wb = Workbook()
+    wb.active.title = "Sales"
+    wb["Sales"]["A1"] = "Region"
+    wb.create_sheet("Summary")["A1"] = "Region"
+    report = deterministic_validate(
+        save(wb, tmp_path), plan(copy_op("A1", "A1", destination_sheet="Summary"))
     )
     assert report.passed
-    assert report.checked_operations == 0
-    assert any("copy_range" in warning for warning in report.warnings)
+
+
+def test_copy_range_with_missing_sheet_is_an_error(tmp_path):
+    wb = Workbook()
+    wb.active.title = "Sales"
+    report = deterministic_validate(
+        save(wb, tmp_path), plan(copy_op("A1", "A1", destination_sheet="Ghost"))
+    )
+    assert not report.passed
+    assert "Missing sheet: Ghost" in report.errors
+
+
+@pytest.mark.parametrize(
+    "operations, reason",
+    [
+        ([copy_op("A1:A3", "A2")], "overlap"),
+        (
+            [copy_op("D2", "D3"), op("set_cell", sheet="Sales", cell="D3", value="later")],
+            "later operation",
+        ),
+        ([copy_op("not-a-range", "D3")], "invalid range"),
+    ],
+)
+def test_copy_range_that_cannot_be_checked_soundly_warns_instead(
+    fill_down, tmp_path, operations, reason
+):
+    report = deterministic_validate(save(fill_down, tmp_path), plan(*operations))
+    assert any("not verified" in w and reason in w for w in report.warnings), report.warnings
 
 
 def test_unreadable_output_is_a_failed_report_not_a_crash(tmp_path):
