@@ -13,7 +13,6 @@ from spreadsheet_agents.schemas.task import (
 )
 from spreadsheet_agents.tools.workbook_reader import inspect_workbook
 
-
 PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "prompts/baseline/validator.md"

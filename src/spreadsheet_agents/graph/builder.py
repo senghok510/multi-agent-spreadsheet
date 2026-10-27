@@ -1,23 +1,21 @@
 """Construct the spreadsheet agent workflow.
 """
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from langgraph.graph import StateGraph, START, END
+from langgraph.graph import END, START, StateGraph
 
-from spreadsheet_agents.graph.state import SpreadsheetState
-from spreadsheet_agents.graph.routing import route_after_validation
-
+from spreadsheet_agents.agents.editor import run_editor
 from spreadsheet_agents.agents.inspector import (
-    run_inspector,
     InspectionReport,
+    run_inspector,
 )
 from spreadsheet_agents.agents.orchestrator import run_orchestrator
-from spreadsheet_agents.agents.editor import run_editor
 from spreadsheet_agents.agents.validator import run_validator
-
+from spreadsheet_agents.graph.routing import route_after_validation
+from spreadsheet_agents.graph.state import SpreadsheetState
 from spreadsheet_agents.schemas.task import (
-    TaskPlan,
     EditPlan,
+    TaskPlan,
 )
 from spreadsheet_agents.schemas.workbook import WorkbookInfo
 
@@ -27,7 +25,7 @@ def make_trace(agent: str, status: str) -> dict:
         "agent": agent,
         "status": status,
         "timestamp": datetime.now(
-            timezone.utc
+            UTC
         ).isoformat(),
     }
 

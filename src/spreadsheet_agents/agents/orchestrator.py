@@ -8,7 +8,6 @@ from spreadsheet_agents.agents.inspector import InspectionReport
 from spreadsheet_agents.schemas.task import TaskPlan
 from spreadsheet_agents.schemas.workbook import WorkbookInfo
 
-
 PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
     / "prompts/baseline/orchestrator.md"

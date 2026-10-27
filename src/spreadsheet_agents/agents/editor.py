@@ -4,11 +4,10 @@ from pathlib import Path
 
 from langchain_openai import ChatOpenAI
 
-from spreadsheet_agents.schemas.task import TaskPlan, EditPlan
-from spreadsheet_agents.schemas.workbook import WorkbookInfo
 from spreadsheet_agents.agents.inspector import InspectionReport
+from spreadsheet_agents.schemas.task import EditPlan, TaskPlan
+from spreadsheet_agents.schemas.workbook import WorkbookInfo
 from spreadsheet_agents.tools.code_executor import execute_edit_plan
-
 
 PROMPT_PATH = (
     Path(__file__).resolve().parents[1]
