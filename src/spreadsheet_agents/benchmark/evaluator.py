@@ -26,10 +26,15 @@ from pydantic import BaseModel, Field
 from spreadsheet_agents.benchmark.spreadsheetbench_v1 import (
     find_answer_path,
     find_answer_position,
+    load_task,
 )
+from spreadsheet_agents.schemas.task import EditPlan
+from spreadsheet_agents.tools.workbook_editor import apply_operations
 
 MAC_SOFFICE = "/Applications/LibreOffice.app/Contents/MacOS/soffice"
 RECALC_TIMEOUT_SECONDS = 120
+VARIANTS = (1, 2, 3)  # the benchmark scores every task on three test workbooks
+MAX_MISMATCHES_KEPT = 10
 
 
 class RecalculationUnavailable(RuntimeError):
@@ -319,6 +324,123 @@ def score_run(
     return record
 
 
+def _load_edit_plan(metrics: dict[str, Any]) -> EditPlan | None:
+    trace_path = metrics.get("trace_path")
+
+    if not trace_path or not Path(trace_path).exists():
+        return None
+
+    plan = json.loads(Path(trace_path).read_text(encoding="utf-8")).get("edit_plan")
+
+    return EditPlan.model_validate(plan) if plan else None
+
+
+def score_run_all_variants(
+    metrics_path: str | Path,
+    benchmark_root: str | Path,
+    evaluations_dir: str | Path = "outputs/evaluations",
+    recalculate_formulas: bool = True,
+) -> dict[str, Any]:
+    """Score a saved run on all three benchmark variants.
+
+    The workbook the run produced is scored for the variant it ran on. The
+    saved edit plan is replayed on the other variants, which is how the
+    benchmark treats a solution: one answer, run on every test case. No
+    model is called. A plan that cannot be applied to a variant fails it.
+
+    soft = fraction of variants passed; hard = 1 only if all pass.
+    """
+
+    metrics = json.loads(Path(metrics_path).read_text(encoding="utf-8"))
+    task_id = metrics.get("task_id")
+    own_variant = metrics.get("variant")
+
+    record: dict[str, Any] = {
+        "run_id": metrics["run_id"],
+        "task_id": task_id,
+        "runtime_status": metrics.get("status"),
+        "variants": [],
+    }
+
+    if task_id is None or own_variant is None:
+        record.update(
+            passed=False,
+            soft=0.0,
+            hard=0,
+            error="not a benchmark task; nothing to score against",
+        )
+    else:
+        answer_position = find_answer_position(benchmark_root, task_id)
+        edit_plan = _load_edit_plan(metrics)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            for variant in VARIANTS:
+                entry: dict[str, Any] = {
+                    "variant": variant,
+                    "passed": False,
+                    "error": None,
+                    "mismatches": [],
+                }
+
+                try:
+                    answer_path = find_answer_path(benchmark_root, task_id, variant)
+
+                    if answer_path is None:
+                        entry["error"] = "no reference answer file for this variant"
+                    elif variant == own_variant:
+                        entry["source"] = "run output"
+                        output = metrics.get("output_path")
+
+                        if output:
+                            result = evaluate_output(
+                                output, answer_path, answer_position, recalculate_formulas
+                            )
+                        else:
+                            result = EvaluationResult(
+                                passed=False, error="the run produced no output workbook"
+                            )
+
+                        entry.update(_result_fields(result))
+                    elif edit_plan is None:
+                        entry["source"] = "replayed plan"
+                        entry["error"] = "the run has no edit plan to replay"
+                    else:
+                        entry["source"] = "replayed plan"
+                        replayed = apply_operations(
+                            load_task(benchmark_root, task_id, variant).input_path,
+                            Path(scratch) / f"variant{variant}.xlsx",
+                            edit_plan.operations,
+                        )
+                        result = evaluate_output(
+                            replayed, answer_path, answer_position, recalculate_formulas
+                        )
+                        entry.update(_result_fields(result))
+                except RecalculationUnavailable:
+                    raise
+                except Exception as exc:
+                    entry["error"] = f"{type(exc).__name__}: {exc}"
+
+                record["variants"].append(entry)
+
+        passed = sum(entry["passed"] for entry in record["variants"])
+        record["soft"] = round(passed / len(VARIANTS), 4)
+        record["hard"] = int(passed == len(VARIANTS))
+        record["passed"] = bool(record["hard"])
+
+    path = Path(evaluations_dir) / f"{metrics['run_id']}.json"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(record, indent=2, default=str), encoding="utf-8")
+    record["evaluation_path"] = str(path)
+
+    return record
+
+
+def _result_fields(result: EvaluationResult) -> dict[str, Any]:
+    fields = result.model_dump()
+    fields["mismatches"] = fields["mismatches"][:MAX_MISMATCHES_KEPT]
+    return fields
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Score saved runs against the SpreadsheetBench reference answers."
@@ -327,6 +449,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--benchmark-root", help="Benchmark folder (default: config)")
     parser.add_argument("--config", default="configs/baseline.yaml")
     parser.add_argument("--output-dir", default="outputs", help="Where evaluations are written")
+    parser.add_argument(
+        "--single-variant",
+        action="store_true",
+        help="Score only the variant the run used (default: all three, replaying the plan)",
+    )
     args = parser.parse_args(argv)
 
     root = args.benchmark_root
@@ -339,15 +466,36 @@ def main(argv: list[str] | None = None) -> int:
     failures = 0
 
     for metrics_path in args.metrics:
-        record = score_run(
-            metrics_path, root, evaluations_dir=Path(args.output_dir) / "evaluations"
-        )
+        evaluations_dir = Path(args.output_dir) / "evaluations"
+
+        if args.single_variant:
+            record = score_run(metrics_path, root, evaluations_dir=evaluations_dir)
+            detail = record.get("error") or ", ".join(
+                f"{m['cell']} expected {m['expected']!r} got {m['actual']!r}"
+                for m in record.get("mismatches", [])[:3]
+            )
+            summary = ""
+        else:
+            record = score_run_all_variants(metrics_path, root, evaluations_dir=evaluations_dir)
+            summary = f"soft={record['soft']:.2f} hard={record['hard']} "
+            summary += " ".join(
+                f"v{v['variant']}:{'ok' if v['passed'] else 'FAIL'}" for v in record["variants"]
+            )
+            first_failure = next((v for v in record["variants"] if not v["passed"]), None)
+            detail = ""
+
+            if first_failure:
+                reason = first_failure.get("error") or ", ".join(
+                    f"{m['cell']} expected {m['expected']!r} got {m['actual']!r}"
+                    for m in first_failure["mismatches"][:2]
+                )
+                detail = f"(v{first_failure['variant']}: {reason})"
+
+            detail = record.get("error") or detail
+
         verdict = "PASS" if record["passed"] else "FAIL"
-        detail = record.get("error") or ", ".join(
-            f"{m['cell']} expected {m['expected']!r} got {m['actual']!r}"
-            for m in record.get("mismatches", [])[:3]
-        )
-        print(f"{verdict}  {record['task_id']} (runtime: {record['runtime_status']})  {detail}")
+        runtime = record["runtime_status"]
+        print(f"{verdict}  {record['task_id']} (runtime: {runtime})  {summary}{detail}")
         failures += not record["passed"]
 
     return 1 if failures else 0

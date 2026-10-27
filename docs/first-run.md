@@ -117,6 +117,32 @@ target is not a substitute for the benchmark's own definition of correct.
 Limits of these numbers: one run per task, variant 1 only (the benchmark also runs variants 2 and 3,
 and its hard score needs all three), and six of 200 tasks.
 
+## Scored on all three variants
+
+The benchmark runs each solution on three test workbooks (variants 1-3): soft = fraction passed,
+hard = all passed. `score_run_all_variants` scores the run's own output for the variant it ran on
+and replays the saved edit plan on the other two (no new model calls), the way the benchmark runs
+one solution on every test case. A plan that cannot be applied to a variant fails it.
+
+| Task | Variant 1 | Variant 2 | Variant 3 | Soft | Hard |
+|---|---|---|---|---|---|
+| `59196` | pass | pass | pass | 1.00 | **1** |
+| `15027` | pass | fail* | fail* | 0.33* | 0* |
+| `55860` | fail | fail | fail | 0.00 | 0 |
+| `61-1` | fail | fail | fail | 0.00 | 0 |
+| `493-18` | fail | fail | fail | 0.00 | 0 |
+| `275-49` | fail | fail | fail | 0.00 | 0 |
+
+\* **Wrong, caused by a bug in our own tool.** The replay on variants 2 and 3 was rejected by the
+self-reference check added for issue #28: the model's formulas contain `COLUMN(B6)` inside `B6`.
+`COLUMN()` reads only a cell's position, not its value, so this is not a circular reference
+(LibreOffice calculated the variant-1 output without complaint). With that check switched off for
+one throwaway run, `15027` passes all three variants (soft 1.00, hard 1). A follow-up fixes the
+check; until then the table above shows what the current code reports.
+
+Two of six tasks (`59196`, and `15027` once the check is fixed) pass the benchmark's hard
+restriction. Still one run per task, six of 200 tasks, `gpt-4.1-mini`.
+
 ## Problems the real run exposed (already fixed)
 
 Mocked tests cannot find these; only calling the real API can.
