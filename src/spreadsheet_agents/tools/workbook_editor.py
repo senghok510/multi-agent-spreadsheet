@@ -4,8 +4,10 @@
 from pathlib import Path
 
 from openpyxl import load_workbook
+from openpyxl.formula import Tokenizer
 from openpyxl.formula.translate import Translator
 from openpyxl.utils.cell import (
+    column_index_from_string,
     coordinate_from_string,
     get_column_letter,
     range_boundaries,
@@ -18,6 +20,47 @@ from spreadsheet_agents.schemas.task import (
 
 def _validate_cell(cell: str) -> None:
     coordinate_from_string(cell)
+
+
+def refers_to_own_cell(formula: str, sheet: str, cell: str) -> bool:
+    """True if `formula`, written into `sheet!cell`, reads that same cell.
+
+    Covers direct references (=B2), absolute ones (=$B$2), and ranges or
+    whole rows/columns that contain the cell (=SUM(B1:B5), =SUM(B:B)).
+    References built at run time (INDIRECT, OFFSET) cannot be seen here.
+    """
+
+    letters, row = coordinate_from_string(cell)
+    column = column_index_from_string(letters)
+
+    for token in Tokenizer(formula).items:
+        if token.type != "OPERAND" or token.subtype != "RANGE":
+            continue
+
+        reference = token.value
+        reference_sheet = None
+
+        if "!" in reference:
+            reference_sheet, reference = reference.rsplit("!", 1)
+            reference_sheet = reference_sheet.strip("'").replace("''", "'")
+
+        if reference_sheet is not None and reference_sheet != sheet:
+            continue
+
+        try:
+            min_col, min_row, max_col, max_row = range_boundaries(
+                reference.replace("$", "")
+            )
+        except ValueError:
+            continue  # a defined name such as TaxRate, not a cell reference
+
+        in_columns = min_col is None or min_col <= column <= max_col
+        in_rows = min_row is None or min_row <= row <= max_row
+
+        if in_columns and in_rows:
+            return True
+
+    return False
 
 
 def translate_copied_value(value, source_cell: str, destination_cell: str):
@@ -78,6 +121,18 @@ def _apply_operation(wb, operation: SpreadsheetOperation):
 
         _validate_cell(op.cell)
         ws = wb[op.sheet]
+
+        # set_cell with a string starting "=" is also stored as a formula.
+        if (
+            op.type in {"set_cell", "set_formula"}
+            and isinstance(op.value, str)
+            and op.value.startswith("=")
+            and refers_to_own_cell(op.value, op.sheet, op.cell)
+        ):
+            raise ValueError(
+                f"Formula in {op.sheet}!{op.cell} refers to its own "
+                "cell (circular reference)"
+            )
 
         if op.type == "clear_cell":
             ws[op.cell] = None
