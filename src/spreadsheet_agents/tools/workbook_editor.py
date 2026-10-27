@@ -137,6 +137,12 @@ def apply_operations(
     if not input_path.exists():
         raise FileNotFoundError(input_path)
 
+    if output_path.resolve() == input_path.resolve():
+        raise ValueError(
+            "Refusing to overwrite the input workbook; "
+            "choose a different output path"
+        )
+
     output_path.parent.mkdir(
         parents=True,
         exist_ok=True,
