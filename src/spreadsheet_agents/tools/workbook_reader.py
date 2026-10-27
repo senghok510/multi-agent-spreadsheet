@@ -26,8 +26,8 @@ def _plain(value):
 
 def inspect_workbook(
     path: str | Path,
-    max_preview_rows: int = 5,
-    max_preview_columns: int = 20,
+    max_preview_rows: int = 50,
+    max_preview_columns: int = 30,
     max_formulas: int = 30,
 ) -> WorkbookInfo:
     path = Path(path)
@@ -87,6 +87,10 @@ def inspect_workbook(
                     columns=ws.max_column,
                     headers=headers,
                     sample_rows=preview,
+                    truncated=(
+                        ws.max_row > max_preview_rows
+                        or ws.max_column > max_preview_columns
+                    ),
                     formulas=formulas,
                 )
             )

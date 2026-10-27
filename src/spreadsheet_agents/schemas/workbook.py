@@ -12,6 +12,8 @@ class SheetInfo(BaseModel):
     columns: int
     headers: list[str] = Field(default_factory=list)
     sample_rows: list[list[Any]] = Field(default_factory=list)
+    # True when the sheet has more rows or columns than sample_rows shows.
+    truncated: bool = False
     formulas: list[dict[str, str]] = Field(default_factory=list)
 
 

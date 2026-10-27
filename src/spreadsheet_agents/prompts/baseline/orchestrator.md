@@ -17,6 +17,12 @@ Convert a user request into a structured execution plan.
 7. If information is missing, explicitly describe it.
 8. Keep the plan concise and actionable.
 
+# Partial views
+
+A sheet marked `"truncated": true` shows only its first rows and
+columns in `sample_rows`; `rows` and `columns` give its true size.
+Never assume unseen cells are empty and never invent their contents.
+
 # Output
 
 Return a structured TaskPlan.
