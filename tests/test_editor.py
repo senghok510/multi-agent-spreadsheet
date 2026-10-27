@@ -235,3 +235,75 @@ def test_missing_input_raises(tmp_path, out):
 def test_output_must_not_overwrite_input(source):
     with pytest.raises(ValueError, match="overwrite"):
         apply_operations(source, source, [op("set_cell", sheet="Sales", cell="A1", value="X")])
+
+
+# --- self-referencing formulas ---------------------------------------------
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=B2",
+        "=B2+1",
+        "=$B$2",
+        "=b2",
+        "=IF(B2=0,0,1)",
+        "=Sales!B2",
+        "=SUM(B1:B5)",
+        "=SUM($B$1:$B$5)",
+        "=SUM(B:B)",
+        "=SUM(2:2)",
+        "=SUM(A1:C3)",
+    ],
+)
+def test_formula_referring_to_its_own_cell_is_rejected(source, out, formula):
+    with pytest.raises(RuntimeError, match="Operation 0 failed.*circular reference"):
+        apply_operations(source, out, [op("set_formula", sheet="Sales", cell="B2", value=formula)])
+    assert not out.exists()
+
+
+@pytest.mark.parametrize(
+    "formula",
+    [
+        "=B1",
+        "=B20",
+        "=B3+B1",
+        "=SUM(B3:B5)",
+        "=SUM(A1:A5)",
+        "=SUM(C:C)",
+        "=SUM(3:3)",
+        "=Other!B2",
+        "='My Sheet'!B2",
+        "=TaxRate*A2",
+        '="B2"',
+        "=1+1",
+    ],
+)
+def test_formulas_that_only_look_similar_are_allowed(source, out, formula):
+    apply_operations(source, out, [op("set_formula", sheet="Sales", cell="B2", value=formula)])
+    assert read(out)["Sales"]["B2"].value == formula
+
+
+def test_self_reference_is_also_caught_through_set_cell(source, out):
+    # openpyxl stores a string starting with "=" as a formula, so set_cell must not bypass the rule.
+    with pytest.raises(RuntimeError, match="circular reference"):
+        apply_operations(source, out, [op("set_cell", sheet="Sales", cell="B2", value="=B2")])
+
+
+def test_plain_text_in_set_cell_is_unaffected(source, out):
+    apply_operations(source, out, [op("set_cell", sheet="Sales", cell="B2", value="B2")])
+    assert read(out)["Sales"]["B2"].value == "B2"
+
+
+def test_self_reference_error_names_the_cell(source, out):
+    with pytest.raises(RuntimeError, match=r"Sales!C3"):
+        apply_operations(source, out, [op("set_formula", sheet="Sales", cell="C3", value="=C3")])
+
+
+def test_the_task_275_49_pattern_is_rejected(source, out):
+    ops = [
+        op("set_formula", sheet="Sales", cell="A2", value='=B2&" "&C2'),
+        op("set_formula", sheet="Sales", cell="B2", value="=B2"),
+    ]
+    with pytest.raises(RuntimeError, match="Operation 1 failed"):
+        apply_operations(source, out, ops)
