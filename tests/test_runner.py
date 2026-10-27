@@ -141,3 +141,20 @@ def test_crash_is_recorded_instead_of_raised(scripted, source, tmp_path, monkeyp
     assert metrics["output_path"] is None
     assert Path(metrics["metrics_path"]).exists()
     assert Path(metrics["trace_path"]).exists()
+
+
+def test_crash_keeps_the_work_of_agents_that_finished(scripted, source, tmp_path, monkeypatch):
+    class Exploding(ScriptedLLM):
+        def invoke(self, messages):
+            raise ValueError("bad edit plan")
+
+    monkeypatch.setattr(editor, "ChatOpenAI", Exploding)
+
+    metrics = run(source, tmp_path)
+    trace = json.loads(Path(metrics["trace_path"]).read_text())
+
+    assert metrics["status"] == "error"
+    assert [step["agent"] for step in trace["steps"]] == ["inspector", "orchestrator"]
+    assert trace["task_plan"]["reasoning_summary"] == "write total"
+    assert trace["inspection_report"] is not None
+    assert trace["edit_plan"] is None

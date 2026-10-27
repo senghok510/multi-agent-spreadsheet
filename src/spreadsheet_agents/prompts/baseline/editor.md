@@ -21,6 +21,10 @@ Convert an execution plan into valid spreadsheet operations.
 3. Generate explicit cell references.
 4. Preserve unrelated workbook content.
 5. Use Excel formulas when calculations are requested.
+   A set_formula value must be a string that starts with "=",
+   for example "=SUM(B2:B10)". Never omit the leading "=".
+   Each operation needs its sheet and a single cell such as "D2";
+   never use a range as a cell.
 6. Do not generate arbitrary Python code.
 7. Do not use unsupported operations.
 8. If the task cannot be completed using available

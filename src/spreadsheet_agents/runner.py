@@ -70,15 +70,20 @@ def run_task(
     clock = time.perf_counter()
 
     try:
-        final = build_graph().invoke(
+        # Stream so that, if a node crashes, `final` still holds the
+        # state reached by the agents that did finish.
+        for state in build_graph().stream(
             {
                 "user_request": instruction,
                 "input_path": str(input_path),
                 "output_path": str(workbook_path),
                 "model": model,
                 "trace": [],
-            }
-        )
+            },
+            stream_mode="values",
+        ):
+            final = state
+
         metrics["status"] = final["status"]
         metrics["error"] = final.get("error")
     except Exception as exc:
