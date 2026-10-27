@@ -17,12 +17,15 @@ from spreadsheet_agents.benchmark.evaluator import (
     parse_answer_position,
     recalculate,
     score_run,
+    score_run_all_variants,
     values_match,
 )
 from spreadsheet_agents.benchmark.spreadsheetbench_v1 import (
     find_answer_position,
     load_metadata,
 )
+from spreadsheet_agents.schemas.task import SpreadsheetOperation
+from spreadsheet_agents.tools.workbook_editor import apply_operations
 
 REAL_DATASET = Path("data/raw/spreadsheetbench_v1/sample_data_200")
 needs_libreoffice = pytest.mark.skipif(find_soffice() is None, reason="LibreOffice not installed")
@@ -333,3 +336,201 @@ def test_a_reference_answer_always_matches_itself():
         answer = REAL_DATASET / "spreadsheet" / str(task_id) / f"1_{task_id}_answer.xlsx"
         position = find_answer_position(REAL_DATASET, task_id)
         assert compare_workbooks(answer, answer, position).passed, task_id
+
+
+# --- scoring all three variants ----------------------------------------------
+
+def build_bench(tmp_path, task_id, position, inputs, answers, sheets=None):
+    root = tmp_path / "bench"
+    task_dir = root / "spreadsheet" / task_id
+    task_dir.mkdir(parents=True, exist_ok=True)
+    dataset = root / "dataset.json"
+    records = json.loads(dataset.read_text()) if dataset.exists() else []
+    records.append({"id": task_id, "instruction": "x", "answer_position": position})
+    dataset.write_text(json.dumps(records))
+
+    for variant in (1, 2, 3):
+        sheet = (sheets or {}).get(variant, "Sheet1")
+        save(task_dir / f"{variant}_{task_id}_input.xlsx", inputs[variant], sheet=sheet)
+        save(task_dir / f"{variant}_{task_id}_answer.xlsx", answers[variant], sheet=sheet)
+
+    return root
+
+
+def make_run(tmp_path, task_id, ops, output=None, variant=1, run_id="run1"):
+    trace = tmp_path / f"{run_id}_trace.json"
+    plan = {"explanation": "e", "operations": ops} if ops is not None else None
+    trace.write_text(json.dumps({"edit_plan": plan}))
+    metrics = tmp_path / f"{run_id}_metrics.json"
+    metrics.write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "task_id": task_id,
+                "variant": variant,
+                "status": "success",
+                "trace_path": str(trace),
+                "output_path": str(output) if output else None,
+            }
+        )
+    )
+    return metrics
+
+
+def set_cell(sheet, cell, value):
+    return {"type": "set_cell", "sheet": sheet, "cell": cell, "value": value}
+
+
+def score(tmp_path, metrics, root, recalc=False):
+    return score_run_all_variants(
+        metrics, root, evaluations_dir=tmp_path / "ev", recalculate_formulas=recalc
+    )
+
+
+def test_a_solution_that_works_on_every_variant_passes_all_three(tmp_path):
+    same = {1: {"D1": "Total"}, 2: {"D1": "Total"}, 3: {"D1": "Total"}}
+    root = build_bench(tmp_path, "102", "D1", {v: {"A1": v} for v in (1, 2, 3)}, same)
+    output = save(tmp_path / "out.xlsx", {"D1": "Total"})
+    metrics = make_run(tmp_path, "102", [set_cell("Sheet1", "D1", "Total")], output)
+
+    record = score(tmp_path, metrics, root)
+
+    assert (record["soft"], record["hard"], record["passed"]) == (1.0, 1, True)
+    assert [v["source"] for v in record["variants"]] == [
+        "run output",
+        "replayed plan",
+        "replayed plan",
+    ]
+
+
+def test_hardcoded_answer_passes_variant_one_and_fails_the_rest(tmp_path):
+    inputs = {v: {"B2": v} for v in (1, 2, 3)}
+    answers = {1: {"D2": 2}, 2: {"D2": 4}, 3: {"D2": 6}}  # the answer depends on the data
+    root = build_bench(tmp_path, "101", "D2", inputs, answers)
+    output = save(tmp_path / "out.xlsx", {"D2": 2})
+    metrics = make_run(tmp_path, "101", [set_cell("Sheet1", "D2", 2)], output)
+
+    record = score(tmp_path, metrics, root)
+
+    assert [v["passed"] for v in record["variants"]] == [True, False, False]
+    assert record["soft"] == pytest.approx(1 / 3, abs=1e-3)
+    assert record["hard"] == 0
+    assert record["passed"] is False
+    failed = record["variants"][1]["mismatches"][0]
+    assert (failed["cell"], failed["expected"], failed["actual"]) == ("D2", 4, 2)
+
+
+@needs_libreoffice
+def test_a_formula_that_generalises_passes_all_variants(tmp_path):
+    inputs = {v: {"B2": v} for v in (1, 2, 3)}
+    answers = {1: {"D2": 2}, 2: {"D2": 4}, 3: {"D2": 6}}
+    root = build_bench(tmp_path, "101", "D2", inputs, answers)
+    ops = [{"type": "set_formula", "sheet": "Sheet1", "cell": "D2", "value": "=B2*2"}]
+    output = apply_operations(
+        root / "spreadsheet/101/1_101_input.xlsx",
+        tmp_path / "out.xlsx",
+        [SpreadsheetOperation(**op) for op in ops],
+    )
+
+    record = score(tmp_path, make_run(tmp_path, "101", ops, output), root, recalc=True)
+
+    assert (record["soft"], record["hard"]) == (1.0, 1)
+
+
+def test_plan_that_cannot_be_applied_to_a_variant_fails_that_variant_with_the_reason(tmp_path):
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same, sheets={2: "Other"})
+    output = save(tmp_path / "out.xlsx", {"A1": "x"})
+    metrics = make_run(tmp_path, "103", [set_cell("Sheet1", "A1", "x")], output)
+
+    record = score(tmp_path, metrics, root)
+
+    assert [v["passed"] for v in record["variants"]] == [True, False, True]
+    assert "Operation 0 failed" in record["variants"][1]["error"]
+
+
+def test_the_runs_own_variant_uses_its_real_output(tmp_path):
+    inputs = {v: {"B2": v} for v in (1, 2, 3)}
+    answers = {1: {"D2": 2}, 2: {"D2": 4}, 3: {"D2": 6}}
+    root = build_bench(tmp_path, "101", "D2", inputs, answers)
+    output = save(tmp_path / "out.xlsx", {"D2": 4})  # the run was on variant 2
+    metrics = make_run(tmp_path, "101", [set_cell("Sheet1", "D2", 4)], output, variant=2)
+
+    record = score(tmp_path, metrics, root)
+
+    sources = {v["variant"]: v["source"] for v in record["variants"]}
+    assert sources == {1: "replayed plan", 2: "run output", 3: "replayed plan"}
+    assert [v["passed"] for v in record["variants"]] == [False, True, False]
+
+
+def test_run_without_an_edit_plan_can_only_pass_its_own_variant(tmp_path):
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same)
+    output = save(tmp_path / "out.xlsx", {"A1": "x"})
+
+    record = score(tmp_path, make_run(tmp_path, "103", None, output), root)
+
+    assert [v["passed"] for v in record["variants"]] == [True, False, False]
+    assert "no edit plan" in record["variants"][1]["error"]
+
+
+def test_run_without_output_fails_its_own_variant_but_replays_the_others(tmp_path):
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same)
+
+    record = score(tmp_path, make_run(tmp_path, "103", [set_cell("Sheet1", "A1", "x")]), root)
+
+    assert [v["passed"] for v in record["variants"]] == [False, True, True]
+    assert "no output workbook" in record["variants"][0]["error"]
+
+
+def test_missing_variant_input_fails_only_that_variant(tmp_path):
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same)
+    (root / "spreadsheet/103/3_103_input.xlsx").unlink()
+    output = save(tmp_path / "out.xlsx", {"A1": "x"})
+
+    metrics = make_run(tmp_path, "103", [set_cell("Sheet1", "A1", "x")], output)
+
+    record = score(tmp_path, metrics, root)
+
+    assert [v["passed"] for v in record["variants"]] == [True, True, False]
+    assert record["variants"][2]["error"]
+
+
+def test_all_variants_result_is_stored_without_touching_the_metrics(tmp_path):
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same)
+    output = save(tmp_path / "out.xlsx", {"A1": "x"})
+    metrics = make_run(tmp_path, "103", [set_cell("Sheet1", "A1", "x")], output)
+    before = metrics.read_text()
+
+    score(tmp_path, metrics, root)
+
+    stored = json.loads((tmp_path / "ev" / "run1.json").read_text())
+    assert stored["hard"] == 1
+    assert len(stored["variants"]) == 3
+    assert metrics.read_text() == before
+
+
+def test_custom_task_has_no_variants_to_score(tmp_path):
+    root = build_bench(tmp_path, "103", "A1", *[{v: {"A1": "x"} for v in (1, 2, 3)}] * 2)
+    metrics = make_run(tmp_path, None, None, None, variant=None)
+
+    record = score(tmp_path, metrics, root)
+
+    assert record["passed"] is False
+    assert record["variants"] == []
+    assert "not a benchmark task" in record["error"]
+
+
+def test_missing_libreoffice_stops_scoring_instead_of_failing_every_variant(tmp_path, monkeypatch):
+    # A broken environment is not a wrong answer: it must not be scored as one.
+    monkeypatch.setattr("spreadsheet_agents.benchmark.evaluator.find_soffice", lambda: None)
+    same = {v: {"A1": "x"} for v in (1, 2, 3)}
+    root = build_bench(tmp_path, "103", "A1", same, same)
+    output = save(tmp_path / "out.xlsx", {"A1": "x"})
+    metrics = make_run(tmp_path, "103", [set_cell("Sheet1", "A1", "x")], output)
+
+    with pytest.raises(RecalculationUnavailable):
+        score(tmp_path, metrics, root, recalc=True)
