@@ -144,3 +144,30 @@ def find_answer_path(
     )
 
     return answer_path if answer_path.exists() else None
+
+
+def find_answer_position(
+    root: str | Path,
+    task_id: str | int,
+) -> str:
+    """Return the cell range the benchmark scores for a task.
+
+    Evaluator-only, like find_answer_path(): never call this from agent
+    code or put the result in agent state.
+    """
+
+    matches = [
+        record
+        for record in load_metadata(root)
+        if str(record.get("id", record.get("task_id"))) == str(task_id)
+    ]
+
+    if not matches:
+        raise KeyError(f"Task {task_id} not found in metadata")
+
+    position = matches[0].get("answer_position")
+
+    if not position:
+        raise ValueError(f"Task {task_id} has no answer_position")
+
+    return str(position)
