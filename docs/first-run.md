@@ -47,21 +47,21 @@ workbook. Neither is a benchmark score.
 | Task | Our verdict | Checked by hand |
 |---|---|---|
 | `59196` | success | Per-row formulas in `H4:H5`, `H3` untouched. Looks correct |
-| `15027` | success | **Wrong.** `B6` gives 1008.33 where the original gives 1000, `C6` gives 1019.4 where it gave 1008.33. The numerator uses the same column's row 7 instead of the previous column's, and the divisor is one too low. `H6` would divide by zero if `H5` were non-zero. A false success |
+| `15027` | success | *Hand-check was wrong; see the correction below.* The model rewrote `B6:H6` with a different formula, which I judged wrong by comparing with the original formulas. The benchmark scores only `E1`, and its reference value (1019.4) equals what the model's formulas produce |
 | `493-18` | failed | Correctly failed. The Editor cleared rows 2-5 (Ford, VW, Audi, Ferrari); the rule (name not in column F) says rows 2, 3 and 7 (Ford, VW, Fiat). Audi and Ferrari were erased wrongly. The Validator's stated reason was inaccurate |
 | `55860` | error | The Editor declined ("ambiguous"). The sheet has 43 rows; the model saw 5 |
 | `61-1` | error | The Editor declined (instruction says VBA macro). The sheet has 9 rows; the model saw 5 |
 | `275-49` | error | The Editor declined (ambiguous). The sheet has 11 rows; the model saw 5 |
 
-Of six tasks, one output looks correct. Findings:
+Of six tasks, one output looked correct by hand (see the correction below for `15027`). Findings:
 
 1. **The model sees only 5 rows per sheet** (`max_preview_rows`). Three of the refusals involve
    sheets larger than that. Not yet shown to be the cause.
 2. **A refusal is recorded as `status: error`**, indistinguishable from a crash. It needs its own
    status (for example `declined`) so metrics can separate model refusals from code failures.
 3. **"Success" means the plan was applied, not that it is right.** Nothing evaluates formulas, so
-   a wrong formula passes (`15027`). The official evaluation against the reference answers
-   (Milestone 3) is needed to know true accuracy.
+   a wrong formula can pass, and (as `15027` showed) a hand-check can be wrong too. The official
+   evaluation against the reference answers is the only reliable judge; see the scoring section.
 4. **The Validator's explanations are unreliable.** It filed a passing observation under errors
    (`15027`, earlier run) and gave the wrong reason for `493-18`.
 5. The Editor adds changes nobody asked for (`493-18` wrote Keep/Remove formulas into column G).
@@ -79,8 +79,7 @@ declined tasks were rerun, one run each, `gpt-4.1-mini`:
 | `275-49` | declined | failed | Correct verdict, wrong reason. The Validator complained that no macro exists; it missed that the Editor wrote `=B2` into `B2` and `=C2` into `C2` (circular references that destroy the original data). Column A, an ID, was overwritten with a merged string |
 
 Conclusion: seeing the whole sheet is the right input, but it did not make results more correct.
-Two refusals became wrong attempts, one of which passed our checks. Of nine task runs so far,
-one output looks correct (`59196`).
+Two refusals became attempts that did not pass the benchmark, one of which passed our checks.
 
 New findings:
 
@@ -88,6 +87,35 @@ New findings:
    objectively wrong and cheap to check deterministically.
 7. **The Editor tends to add helper columns instead of editing in place**, and the Validator accepts
    the workaround even when it notes it.
+
+## Scored against the reference answers
+
+`spreadsheet_agents.benchmark.evaluator` (issue #30) recalculates each output with headless
+LibreOffice and compares the cell values in the task's `answer_position` with the reference
+answer, following the benchmark's own `evaluation.py`: values only, numbers rounded to 2 decimals,
+exact strings, empty equals empty. It is separate from the agents and never imported by them.
+
+Newest run of each task, **variant 1 only**:
+
+| Task | Our runtime verdict | Benchmark | Detail |
+|---|---|---|---|
+| `59196` | success | **pass** | |
+| `15027` | success | **pass** | `E1` = 1019.4 as in the reference |
+| `55860` | error (declined) | fail | no output workbook |
+| `61-1` | success | **fail** | `D2` expected `RPC0094-001-001-001`, got `RPC0094`: column D was never changed |
+| `493-18` | failed | fail | `A2` expected `Audi`, got empty: Audi, Ferrari and Porsche were erased |
+| `275-49` | failed | fail | `#VALUE!` from the circular references written before the self-reference check existed |
+
+Two of six pass. Our runtime Validator agreed with the benchmark on five of six; its one error was
+`61-1`, a false success.
+
+**Correction.** An earlier version of this note called `15027` a false success, because the model's
+formulas in `B6:H6` differ from the original ones. That was a wrong inference: the task is scored on
+`E1` only, and the reference value matches the model's result. A hand-check against an assumed
+target is not a substitute for the benchmark's own definition of correct.
+
+Limits of these numbers: one run per task, variant 1 only (the benchmark also runs variants 2 and 3,
+and its hard score needs all three), and six of 200 tasks.
 
 ## Problems the real run exposed (already fixed)
 
