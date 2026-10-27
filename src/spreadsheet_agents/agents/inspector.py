@@ -35,7 +35,10 @@ def run_inspector(
     llm = ChatOpenAI(
         model=model,
         temperature=0,
-    ).with_structured_output(InspectionReport)
+    ).with_structured_output(
+        InspectionReport,
+        method="function_calling",
+    )
 
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
 

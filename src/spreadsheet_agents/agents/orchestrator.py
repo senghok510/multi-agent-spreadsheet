@@ -24,7 +24,10 @@ def run_orchestrator(
     llm = ChatOpenAI(
         model=model,
         temperature=0,
-    ).with_structured_output(TaskPlan)
+    ).with_structured_output(
+        TaskPlan,
+        method="function_calling",
+    )
 
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
 

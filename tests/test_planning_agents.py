@@ -11,6 +11,10 @@ from spreadsheet_agents.agents.orchestrator import run_orchestrator
 from spreadsheet_agents.schemas.task import TaskPlan
 from spreadsheet_agents.schemas.workbook import SheetInfo, WorkbookInfo
 
+# OpenAI's strict structured-output mode rejects our schemas (dict fields, defaulted
+# fields), which only a real API call reveals. Keep every agent on function calling.
+STRUCTURED_OUTPUT_KWARGS = {"method": "function_calling"}
+
 
 class FakeLLM:
     """Stands in for ChatOpenAI and records how the agent called it."""
@@ -25,8 +29,9 @@ class FakeLLM:
         self.messages = None
         FakeLLM.instances.append(self)
 
-    def with_structured_output(self, schema):
+    def with_structured_output(self, schema, **kwargs):
         self.schema = schema
+        self.kwargs = kwargs
         return self
 
     def invoke(self, messages):
@@ -90,6 +95,7 @@ def test_inspector_is_deterministic_and_structured(fake_llm, workbook_path, monk
     assert llm.model == "test-model"
     assert llm.temperature == 0
     assert llm.schema is InspectionReport
+    assert llm.kwargs == STRUCTURED_OUTPUT_KWARGS
 
 
 def test_inspector_fails_before_calling_llm_when_file_missing(fake_llm, tmp_path):
@@ -111,6 +117,7 @@ def test_orchestrator_returns_structured_plan(fake_llm, monkeypatch):
 
     assert result == plan
     assert fake_llm.instances[0].schema is TaskPlan
+    assert fake_llm.instances[0].kwargs == STRUCTURED_OUTPUT_KWARGS
 
 
 def test_orchestrator_sends_request_workbook_and_inspection(fake_llm, monkeypatch):
