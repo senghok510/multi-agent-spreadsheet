@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 from openpyxl import Workbook
+from openpyxl.worksheet.formula import ArrayFormula
 
 from spreadsheet_agents.tools.workbook_reader import inspect_workbook
 
@@ -69,3 +70,34 @@ def test_input_file_is_not_modified(workbook_path):
 def test_missing_file_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
         inspect_workbook(tmp_path / "nope.xlsx")
+
+
+@pytest.fixture
+def array_formula_path(tmp_path: Path) -> Path:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Calc"
+    ws.append([3, 9, 5])
+    ws["E1"] = ArrayFormula("E1", "=MAX(IF(A1:C1<>0,COLUMN(A1:C1)))")
+    ws["E2"] = "=SUM(A1:C1)"
+    path = tmp_path / "array.xlsx"
+    wb.save(path)
+    return path
+
+
+def test_array_formula_text_is_reported_not_an_object_repr(array_formula_path):
+    calc = inspect_workbook(array_formula_path).sheets[0]
+    formulas = {item["cell"]: item["formula"] for item in calc.formulas}
+    assert formulas["E1"] == "=MAX(IF(A1:C1<>0,COLUMN(A1:C1)))"
+    assert formulas["E2"] == "=SUM(A1:C1)"
+    assert "object at 0x" not in str(calc.formulas)
+
+
+def test_array_formula_in_sample_rows_is_plain_text(array_formula_path):
+    calc = inspect_workbook(array_formula_path).sheets[0]
+    assert calc.sample_rows[0][4] == "=MAX(IF(A1:C1<>0,COLUMN(A1:C1)))"
+
+
+def test_workbook_info_with_array_formula_serializes_to_json(array_formula_path):
+    info = inspect_workbook(array_formula_path)
+    assert "MAX(IF(" in info.model_dump_json()
